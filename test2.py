@@ -8,16 +8,16 @@ class Motor(om.ExplicitComponent):
         self.add_output('P_in', val=0.0, units='W')
 
     def setup_partials(self):
-        self.declare_partials('P_req_shaft', 'P_out')
+        self.declare_partials('P_in', 'P_req_shaft')
 
     def compute(self, inputs, outputs):
-        P_out = inputs['P_req_shaft']
+        P_req_shaft = inputs['P_req_shaft']
         motor_efficiency = 1
-        outputs['P_in'] = P_out / motor_efficiency
+        outputs['P_in'] = P_req_shaft / motor_efficiency
 
     def compute_partials(self, partials):
         motor_efficiency = 1
-        partials['P_in', 'P_out'] = 1.0 / motor_efficiency
+        partials['P_in', 'P_req_shaft'] = 1.0 / motor_efficiency
 
 
 class PowerSplitter(om.ExplicitComponent):
@@ -49,7 +49,7 @@ class FuelCell(om.ExplicitComponent):
         self.add_output('P_fuelcell', val=0.0, units='W')
 
     def setup_partials(self):
-        self.declare_partials('P_fuelcell', 'P_out')
+        self.declare_partials('P_fuelcell', 'P_fc')
 
     def compute(self, inputs, outputs):
         P_fc = inputs['P_fc']
@@ -63,27 +63,31 @@ class FuelCell(om.ExplicitComponent):
 class Battery(om.ExplicitComponent):
     def setup(self):
         self.add_input('P_batt', val=0.0, units='W')
-        self.add_input('E_capacity_batt', val=30*3600, units='J') # 1 Wh = 3600 J
-        self.add_input('SoC_initial', val=1)
+        #self.add_input('E_capacity_batt', val=30*3600, units='J') # 1 Wh = 3600 J
+        self.add_input('E_capacity_batt', units='J') # 1 Wh = 3600 J
+        self.add_input('SoC_initial')
         # 0.25C means 60min/0.25 (4h), 0.5C means 60min/0.5 (2h), 1C means 60 min,
         # 2C means 60min/2, 5C means 60min/5
-        self.add_input('C_rate', val=1) # 1C
-        self.add_input('time', val=1, units='s') # 1 s
+        self.add_input('C_rate_batt') # 1C
+        self.add_input('time', units='s') # 1 s
         self.add_output('E_final_batt', val=0.0, units='J')
         self.add_output('SoC_final', val=0.0)
         self.add_output('E_in_battery', val=0.0, units ='J')
 
     def setup_partials(self):
-        self.declare_partials('P_batt', 'E_battery')
+        self.declare_partials('E_final_batt', 'P_batt')
+        self.declare_partials('SoC_final', 'P_batt')
+        self.declare_partials('E_in_battery', 'P_batt')
+        # Shouldn't there be with respect to all *?
 
     def compute(self, inputs, outputs):
         P_batt = inputs['P_batt']
         E_capacity_batt = inputs['E_capacity_batt']
         SoC_initial = inputs['SoC_initial']
         time = inputs['time']
-        C_rate = inputs['C_rate']
+        C_rate_batt = inputs['C_rate_batt']
 
-        max_power_allowed = (E_capacity_batt * SoC_initial * C_rate) / (60 * 60) # [J]*[~]*[~]/[s]
+        max_power_allowed = (E_capacity_batt * SoC_initial * C_rate_batt) / (60 * 60) # [J]*[~]*[~]/[s]
         if P_batt > max_power_allowed:
             raise ValueError('Battery power exceeds maximum power allowed by C-rate')
         # Calculate the final energy in the battery
@@ -105,13 +109,13 @@ class Battery(om.ExplicitComponent):
         partials['E_final_batt', 'E_capacity_batt'] = SoC_initial
         partials['E_final_batt', 'SoC_initial'] = E_capacity_batt
         partials['E_final_batt', 'time'] = -1 * P_batt
-        partials['E_final_batt', 'C_rate'] = 0  # C_rate does not affect E_final_batt directly
+        partials['E_final_batt', 'C_rate_batt'] = 0  # C_rate_batt does not affect E_final_batt directly
 
         partials['SoC_final', 'P_batt'] = time / E_capacity_batt
         partials['SoC_final', 'E_capacity_batt'] = -1 * (P_batt * time) / (E_capacity_batt ** 2)
         partials['SoC_final', 'SoC_initial'] = 1
         partials['SoC_final', 'time'] = P_batt / E_capacity_batt
-        partials['SoC_final', 'C_rate'] = 0  # C_rate does not affect SoC_final directly
+        partials['SoC_final', 'C_rate_batt'] = 0  # C_rate_batt does not affect SoC_final directly
 
         partials['E_in_battery', 'E_capacity_batt'] = 1
 
@@ -122,7 +126,7 @@ class TotalMass(om.ExplicitComponent):
         self.add_input('fuelcell_power_density', val=1000, units='W/kg')  # W/kg
         self.add_input('battery_energy_density', val=25*3600, units='J/kg')  # J/kg
         # 1C = 0.00027778 Ah
-        self.add_input('C_rate_batt', val=1) #1C
+        self.add_input('C_rate_batt') #1C
         self.add_output('mass_total', val=0.0, units='kg')
 
     def setup_partials(self):
@@ -174,9 +178,10 @@ ivc.add_output('SoC_initial', val=1.0)
 # prob.model.set_input_defaults('P_req_shaft', 100.0)
 ivc.add_output('P_req_shaft', val=100, units='W')
 ivc.add_output('E_capacity_batt', val=30*3600, units='J') # 30 Wh
-
+ivc.add_output('C_rate_batt', val=1) # 1C
 ivc.add_output('fuelcell_power_density', val=1000, units='W/kg')
 ivc.add_output('battery_energy_density', val=25*3600, units='J/kg')
+ivc.add_output('time', val=1, units='s') # 1 s
 
 # Add the IndepVarComp to your model
 prob.model.add_subsystem('ivc', ivc, promotes=['*'])
@@ -187,7 +192,7 @@ prob.model.add_subsystem('power', Power())
 prob.model.add_subsystem('mass', Mass())
 
 # Connect the IVC.P_req_shaft with P_out in motor component under propulsion group
-prob.model.connect('P_req_shaft', 'propulsion.motor.P_req_shaft')
+prob.model.connect('P_req_shaft', 'propulsion.P_req_shaft')
 
 # Connect the output of the Motor to the input of the PowerSplitter
 prob.model.connect('propulsion.motor.P_in', 'power.powersplitter.P_out')
@@ -198,8 +203,13 @@ prob.model.connect('power.powersplitter.P_battery', 'power.battery.P_batt')
 
 # Connect the IVC.SoC_initial with SoC_initial in battery component under power group
 prob.model.connect('SoC_initial', 'power.battery.SoC_initial')
+# Connect the IVC.time with time in battery component under power group
+prob.model.connect('time', 'power.battery.time')
 # Connect the IVC.E_capacity_battery with E_capacity_battery in battery component under power group
 prob.model.connect('E_capacity_batt', 'power.battery.E_capacity_batt')
+# Connect the IVC.C_rate_batt with C_rate_batt in battery component under power group
+prob.model.connect('C_rate_batt', 'power.battery.C_rate_batt')
+prob.model.connect('C_rate_batt', 'mass.total_mass.C_rate_batt')
 
 # Connect the output of the FuelCell and Battery to the input of the TotalMass
 prob.model.connect('power.fuelcell.P_fuelcell', 'mass.total_mass.P_fuelcell')
